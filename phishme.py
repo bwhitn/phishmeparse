@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 #from bs4 import BeautifulSoup
-from os import getuid, chown
+from os import getuid, path, chown
 from pwd import getpwuid
 from time import gmtime
+from calendar import timegm
 from json import dumps
 from collections import OrderedDict
+import sys
 import mailbox
 import argparse
-import email
 import re
 
 
@@ -62,8 +63,7 @@ class Phish:
         headers = self.data["headers"]
         for pair in Phish.HEADERSPLIT.finditer(section):
             key = pair.group(1).strip().lower()
-            #TODO: double check that sub works this way
-            val = Phish.LINESPLIT.sub(pair.group(2).strip())
+            val = Phish.LINESPLIT.sub(pair.group(2).strip(), "")
             if key in Phish.SINGLEHEADERS:
                 if key not in headers:
                     headers[key] = val
@@ -92,7 +92,6 @@ class Phish:
 
     # URLS
     # fields: text, url
-    # TODO: finish url parsing
     def __parse_urls__(self, section):
         self.data["urls"] = []
         current_url = None
@@ -100,9 +99,15 @@ class Phish:
             key = pair.group(1).strip().lower()
             val = pair.group(2).strip()
             if key is "url":
-                pass
+                if current_url is None or "url" in current_url:
+                    self.data["urls"].append({key:val})
+                elif "text" in current_url:
+                    current_url["url"] = val
+                current_url = None
             elif key is "link text":
-                pass
+                if current_url is None or "url" in current_url:
+                    current_url = {"text":val}
+                    self.data["urls"].append(current_url)
 
 
     # ATTACHMENTS
@@ -170,56 +175,81 @@ class Phish:
         if self.data is None:
             self.__parse__()
             self.body = None
+            # Generic error check to add to parsing errors
+            if "agent" not in self.data:
+                self.__error__("No Reporter Agent was found")
+            if "counts" not in self.data:
+                self.__error__("No Report Count was found")
+            if "headers" not in self.data:
+                self.__error__("No Email Headers were found")
+            if "folder" not in self.data:
+                self.__error__("No folder information was found")
         return dumps(self.data)
 
 # Parse arguments from command line
 # args: log folder path, alt mbox name
-# TODO finish arg parse
 def arg_parse():
-    arg = argparse()
+    arg = argparse.ArgumentParser(description="Process PhishMe emails in the users mailbox.")
+    arg.add_argument("output_dir", metavar="path", help="The directory that the logs will output to")
+    arg.add_argument("-u", nargs=1, metavar="user", default=getpwuid(getuid())[0], help="User mailbox to use (default: %(default)s)")
+    arg.add_argument("-p", nargs=1, metavar="path", default="/var/mail/", help="Mailbox path (default: %(default)s)")
+    return arg
+
+# Generates JSON string from string message and input email. Used for invalid emails.
+# TODO: finish function to output error logging string
+def __parse_error__(info, message):
     pass
-
-
-# returns the mailbox path of the current user
-mail_user = getpwuid(getuid())[0]
-mail_dir = "/var/mail/"
 
 key_list = []
 
+arg_val = arg_parse().parse_args()
+
+log_name = str(timegm(gmtime())) + ".log"
+log_file = None
+if path.isdir(arg_val.output_dir):
+    log_file = path.join(arg_val.output_dir, log_name)
+else:
+    print(arg_val.output_dir + " is not a valid directory", file=sys.stderr)
+    exit(1)
+
 # Open and lock the mailbox
-mbox = mailbox.mbox(mail_dir + mail_user)
+mbox = mailbox.mbox(arg_val.p + arg_val.u)
 mbox.lock()
 
-# TODO: add argument inputs log dir needs to be a directory that a file name can be appended to.
-log_dir = ""
-
-log_name = str(gmtime()) + ".log"
-# TODO check to make sure mbox has items before creating file
-with open(log_dir + log_name, mode="w") as log_file:
-    for key, message in mbox.iteritems():
-        assert isinstance(message, email.message)
-        key_list.append(key)
-        try:
-            payload = message.get_payload()
-            text_body = None
-            for doc in payload:
-                # We are looking for the email body in text format. We can add the ability to look for text/html version
-                # if we need to later on and use bs4 with get_text
-                # TODO: Don't think inline is required. Should make sure it isn't attachment though. maybe another check
-                if 'inline' in doc.get('Content-Disposition') and doc.get_content_type() == 'text/plain':
-                    text_body = doc.get_payload()
-                    break
-            # create a phish object from the text body. If it was not found raise a error and output it.
-            if text_body is not None:
-                phish_file = Phish(text_body)
+if len(mbox.keys()) > 0:
+    with open(log_file, mode="w") as log_file:
+        for key, message in mbox.iteritems():
+            key_list.append(key)
+            content_type = message.get_content_type()
+            phish_file = None
+            if content_type is not None and content_type.lower().startswith("multipart"):
+                text_body = None
+                payload = message.get_payload()
+                for doc in payload:
+                    # We are looking for the email body in text format. We can add the ability to look for text/html version
+                    # if we need to later on and use bs4 with get_text
+                    content_type = doc.get_content_type()
+                    if doc.get_content_type() == 'text/plain':
+                        text_body = doc.get_payload()
+                        break
+                # create a phish object from the text body. If it was not found raise a error and output it.
+                if text_body is not None:
+                    phish_file = Phish(text_body)
+                else:
+                    log_file.write(__parse_error__("No valid email found in multipart email", message))
+                # Write the data out to the log file
+                log_file.write(phish_file)
+            elif content_type is None or content_type is 'text/plain':
+                payload = message.get_payload()
+                if payload is not None:
+                    phish_file = Phish(payload)
+                    log_file.write(phish_file)
+                else:
+                    log_file.write(__parse_error__("text/plain found but no valid message body", message))
+                    pass
             else:
-                # TODO: maybe change this as it was not intended to mean this or add data to represent this better.
-                raise FileNotFoundError()
-            # Write the data out to the log file
-            log_file.write(phish_file)
-        # TODO: throw error output to log if it does not parse correctly.
-        except FileNotFoundError:
-            pass
+                log_file.write(__parse_error__("No valid email info in email", message))
+
 
 try:
     for key in key_list:
