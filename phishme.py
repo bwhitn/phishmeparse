@@ -75,7 +75,7 @@ class Phish:
         headers = self.data["headers"] = OrderedDict()
         for pair in Phish.HEADERSPLIT.finditer(section):
             _key = pair.group(1).strip().lower()
-            val = Phish.LINESPLIT.sub("", pair.group(2).strip())
+            val = Phish.LINESPLIT.sub("\\n", pair.group(2).strip())
             if _key in Phish.SINGLEHEADERS:
                 if _key not in headers:
                     headers[_key] = val
