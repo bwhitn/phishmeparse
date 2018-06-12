@@ -3,7 +3,7 @@
 # phishme.py
 
 # Description:
-# Parses a mbox mailbox of PhishMe Emails and records the data in json format in a specified directory.
+# Parses a mbox mailbox of PhishMe Emails and records the data in json format in a specified directory.p
 
 # TODO: We could import BeautifulSoup and attempt to parse html if a text/plain version doesn't exist.
 
@@ -247,7 +247,7 @@ log_file = None
 if path.isdir(arg_val.output_dir):
     log_file = path.join(arg_val.output_dir, log_name)
 else:
-    print(arg_val.output_dir + " is not a valid directory", file=sys.stderr)
+    sys.stderr.write(arg_val.output_dir + " is not a valid directory\n")
     exit(1)
 
 # Open and lock the mailbox
@@ -258,6 +258,10 @@ if len(mbox.keys()) > 0:
     with open(log_file, mode="w") as log_file:
         for key, message in mbox.iteritems():
             key_list.append(key)
+            subject = message.get("Subject")
+            # No Matryoshka PhishMe emails
+            if subject is not None and "[POTENTIAL PHISH][POTENTIAL PHISH]" in subject:
+                continue
             content_type = message.get_content_type()
             phish_file = None
             if content_type is not None and message.is_multipart():
