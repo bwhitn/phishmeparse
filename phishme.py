@@ -6,6 +6,8 @@
 # Parses a mbox mailbox of PhishMe Emails and records the data in json format in a specified directory.p
 
 # TODO: We could import BeautifulSoup and attempt to parse html if a text/plain version doesn't exist.
+# TODO: Fix origin parsing
+# TODO: clean up multipart mime parsing
 
 import argparse
 import mailbox
@@ -160,15 +162,19 @@ class Phish:
     def __parse_email_head__(self, section):
         origin = {}
         head_sections = Phish.HEADSPLIT.match(section)
-        for line in head_sections.group(1):
-            if ":" in line:
-                kv = line.split(":", 1)
-                _key = kv[0].strip().lower()
-                if _key in Phish.HEADFIELDS:
-                    origin[_key] = kv[1].strip()
+        if head_sections is not None:
+            for line in head_sections.group(1):
+                if ":" in line:
+                    kv = line.split(":", 1)
+                    _key = kv[0].strip().lower()
+                    if _key in Phish.HEADFIELDS:
+                        origin[_key] = kv[1].strip()
         if len(origin) > 0:
             self.data["origin"] = origin
-        return head_sections.group(2)
+        if head_sections is not None:
+            return head_sections.group(2)
+        else:
+            return section
 
     # Main parse logic
     def __parse__(self):
@@ -266,21 +272,21 @@ if len(mbox.keys()) > 0:
             phish_file = None
             if content_type is not None and message.is_multipart():
                 text_body = None
-                payload = message.get_payload()
-                for doc in payload:
+                for doc in message.walk():
                     # We are looking for the email body in text format. We can add the ability to look for text/html version
                     # if we need to later on and use bs4 with get_text
                     content_type = doc.get_content_type()
                     if doc.get_content_type() == 'text/plain':
-                        text_body = doc.get_payload()
+                        charset = doc.get_content_charset()
+                        text_body = doc.get_payload(decode=True).decode(charset)
                         break
                 # create a phish object from the text body. If it was not found raise a error and output it.
                 if text_body is not None:
+                    # Write the data out to the log file
                     phish_file = str(Phish(text_body))
+                    log_file.write(phish_file)
                 else:
                     log_file.write(__parse_error__("No valid email found in multipart email", message))
-                # Write the data out to the log file
-                log_file.write(phish_file)
             elif content_type is None or content_type == 'text/plain':
                 payload = message.get_payload()
                 if payload is not None:
