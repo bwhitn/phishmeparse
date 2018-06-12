@@ -5,7 +5,7 @@
 # Description:
 # Parses a mbox mailbox of PhishMe Emails and records the data in json format in a specified directory.
 
-# TODO: we could attempt to parse html and import BeautifulSoup if a text/plain version doesn't exist.
+# TODO: We could import BeautifulSoup and attempt to parse html if a text/plain version doesn't exist.
 
 import argparse
 import mailbox
@@ -230,8 +230,11 @@ def arg_parse():
 def __parse_error__(info, email):
     data = {"errors": [info]}
     subject = email.get('Subject')
+    date = email.get('Date')
     if subject is not None:
-        data["headers"] = {'subject': subject}
+        data["origin"] = {'subject': subject}
+    if date is not None:
+        data["origin"] = {'date': date}
     return dumps(data)
 
 
