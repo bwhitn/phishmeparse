@@ -3,17 +3,18 @@
 # phishme.py
 
 # Description:
-# Parses a mbox mailbox of PhishMe Emails and records the data in json format in a specified directory.p
+# Parses a mbox mailbox of PhishMe Emails and records the data in json format in a specified directory.
 
 # TODO: We could import BeautifulSoup and attempt to parse html if a text/plain version doesn't exist.
-# TODO: Fix origin parsing
-# TODO: clean up multipart mime parsing
+# TODO: More robust origin parsing. We are assuming we are getting a forwarded email right now. We could pull values from the email header.
+# TODO: Better string management as we call strip and lower as needed.
 
 import argparse
 import mailbox
 import re
 import sys
-from calendar import timegm
+import email
+from dateutil.parser import parse as dateparse
 from collections import OrderedDict
 from grp import getgrnam
 from json import dumps
@@ -28,6 +29,7 @@ class Phish:
     # Splits lines to be used only when a set maximum number of lines is needed or to remove linebreaks.
     LINESPLIT = re.compile("(?:\r?\n)+", re.DOTALL)
     # Splits email header fields into two capture groups: header name and value
+	# Uses negative lookahead 
     HEADERSPLIT = re.compile("(^[^:]+):\s+((?:.+\r?\n)+?)(?!\s)", re.MULTILINE)
     # Remove the head of the email before the first section
     HEADSPLIT = re.compile("""^(.*?)(-+BEGIN REPORTER AGENT-+.*)""", re.DOTALL)
@@ -42,10 +44,11 @@ class Phish:
                                "mime-version", "content-language", "reply-to"))
 
     # Initialize the class with the default data.
-    def __init__(self, body):
+    def __init__(self, body, eml_date):
         assert isinstance(body, str)
         self.data = None
         self.body = body
+        self.date = dateparse(eml_date).timestamp()
         self.__parse__()
 
     # REPORTER AGENT
@@ -72,7 +75,7 @@ class Phish:
                 self.__error__("Unknown field (" + _key + ") in Reporter Agent")
 
     # EMAIL HEADERS
-    # fields: {}
+    # fields: {} SINGLEHEADERS contains headers which should NOT be List
     def __parse_headers__(self, section):
         headers = self.data["headers"] = OrderedDict()
         for pair in Phish.HEADERSPLIT.finditer(section):
@@ -88,6 +91,8 @@ class Phish:
                     headers[_key].append(val)
                 else:
                     headers[_key] = [val]
+        if "date" in headers:
+            self.data["date"] = dateparse(headers["date"]).timestamp()
 
     # REPORT COUNT
     # fields: phishme, suspicious
@@ -162,23 +167,25 @@ class Phish:
     def __parse_email_head__(self, section):
         origin = {}
         head_sections = Phish.HEADSPLIT.match(section)
+		# TODO: Should probably check that head_section.group(1) does not equal ""
         if head_sections is not None:
-            for line in head_sections.group(1):
+            for line in head_sections.group(1).splitlines():
                 if ":" in line:
                     kv = line.split(":", 1)
                     _key = kv[0].strip().lower()
                     if _key in Phish.HEADFIELDS:
                         origin[_key] = kv[1].strip()
-        if len(origin) > 0:
-            self.data["origin"] = origin
-        if head_sections is not None:
+            if len(origin) > 0:
+                self.data["origin"] = origin
             return head_sections.group(2)
         else:
             return section
 
     # Main parse logic
     def __parse__(self):
-        self.data = {}
+        self.data = OrderedDict()
+        # add a default date
+        self.data["date"] = self.date
         # remove the head of the email before
         self.body = self.__parse_email_head__(self.body)
         # Extract all sections and create a list of them
@@ -225,6 +232,7 @@ class Phish:
 # args: log folder path, alt user mbox, mailbox path
 def arg_parse():
     arg = argparse.ArgumentParser(description="Process PhishMe emails in the users mailbox.")
+	#TODO: Maybe there should be a default value and maybe we sould automaticly create the directory if it doesn't exist.
     arg.add_argument("output_dir", metavar="path", help="The directory that the logs will output to")
     arg.add_argument("-u", metavar="user", default=getpwuid(getuid())[0],
                      help="User mailbox to use (default: %(default)s)")
@@ -233,14 +241,15 @@ def arg_parse():
 
 
 # Generates JSON string from string message and input email. Used for invalid emails.
+# TODO: This should be fixed. While it should work right now if we decided to do multiple errors we would print out multiple error json objects instead of one json object with multiple errors.
 def __parse_error__(info, email):
     data = {"errors": [info]}
     subject = email.get('Subject')
-    date = email.get('Date')
+    date = dateparse(email.get('Date')).timestamp()
     if subject is not None:
         data["origin"] = {'subject': subject}
     if date is not None:
-        data["origin"] = {'date': date}
+        data["date"] = {'date': date}
     return dumps(data)
 
 
@@ -283,7 +292,7 @@ if len(mbox.keys()) > 0:
                 # create a phish object from the text body. If it was not found raise a error and output it.
                 if text_body is not None:
                     # Write the data out to the log file
-                    phish_file = str(Phish(text_body))
+                    phish_file = str(Phish(text_body, message.get("Date")))
                     log_file.write(phish_file)
                 else:
                     log_file.write(__parse_error__("No valid email found in multipart email", message))
