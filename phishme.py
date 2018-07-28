@@ -288,7 +288,10 @@ if len(mbox.keys()) > 0:
                     content_type = doc.get_content_type()
                     if doc.get_content_type() == 'text/plain':
                         charset = doc.get_content_charset()
-                        text_body = doc.get_payload(decode=True).decode(charset)
+			try:
+                            text_body = doc.get_payload(decode=True).decode(charset, errors="replace")
+			catch:
+			    text_body = None
                         break
                 # create a phish object from the text body. If it was not found raise a error and output it.
                 if text_body is not None:
