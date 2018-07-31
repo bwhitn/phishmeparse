@@ -3,7 +3,7 @@
 # phishme.py
 
 # Description:
-# Parses a mbox mailbox of PhishMe Emails and records the data in json format in a specified directory.
+# Parses a mbox mailbox of PhishMe Emails and records the data in json format in a specified directory.p
 
 # TODO: We could import BeautifulSoup and attempt to parse html if a text/plain version doesn't exist.
 # TODO: More robust origin parsing. We are assuming we are getting a forwarded email right now. We could pull values from the email header.
@@ -19,9 +19,9 @@ from collections import OrderedDict
 from grp import getgrnam
 from json import dumps
 # from bs4 import BeautifulSoup
+from calendar import timegm
 from os import getuid, path, chown
 from pwd import getpwuid, getpwnam
-from calendar import timegm
 from time import gmtime
 
 
@@ -30,7 +30,7 @@ class Phish:
     # Splits lines to be used only when a set maximum number of lines is needed or to remove linebreaks.
     LINESPLIT = re.compile("(?:\r?\n)+", re.DOTALL)
     # Splits email header fields into two capture groups: header name and value
-	# Uses negative lookahead 
+    # Uses negative lookahead 
     HEADERSPLIT = re.compile("(^[^:]+):\s+((?:.+\r?\n)+?)(?!\s)", re.MULTILINE)
     # Remove the head of the email before the first section
     HEADSPLIT = re.compile("""^(.*?)(-+BEGIN REPORTER AGENT-+.*)""", re.DOTALL)
@@ -49,7 +49,11 @@ class Phish:
         assert isinstance(body, str)
         self.data = None
         self.body = body
-        self.date = dateparse(eml_date).timestamp()
+        try:
+            self.date = dateparse(eml_date, fuzzy=True).timestamp()
+        except ValueError:
+            self.date = gmtime()
+            self.__error__("Invalid date found using current time")
         self.__parse__()
 
     # REPORTER AGENT
@@ -79,6 +83,7 @@ class Phish:
     # fields: {} SINGLEHEADERS contains headers which should NOT be List
     def __parse_headers__(self, section):
         headers = self.data["headers"] = OrderedDict()
+        section = re.sub('(\r?\n){2,}', '\r\n', section)
         for pair in Phish.HEADERSPLIT.finditer(section):
             _key = pair.group(1).strip().lower()
             val = Phish.LINESPLIT.sub("\\n", pair.group(2).strip())
@@ -93,7 +98,10 @@ class Phish:
                 else:
                     headers[_key] = [val]
         if "date" in headers:
-            self.data["date"] = dateparse(headers["date"]).timestamp()
+            try:
+                self.data["date"] = dateparse(headers["date"], fuzzy=True).timestamp()
+            except ValueError:
+                self.__error__("Unknown date used in header parsing")
 
     # REPORT COUNT
     # fields: phishme, suspicious
@@ -246,7 +254,10 @@ def arg_parse():
 def __parse_error__(info, email):
     data = {"errors": [info]}
     subject = email.get('Subject')
-    date = dateparse(email.get('Date')).timestamp()
+    try:
+        date = dateparse(email.get('Date'), fuzzy=True).timestamp()
+    finally:
+        date = None
     if subject is not None:
         data["origin"] = {'subject': subject}
     if date is not None:
@@ -288,10 +299,10 @@ if len(mbox.keys()) > 0:
                     content_type = doc.get_content_type()
                     if doc.get_content_type() == 'text/plain':
                         charset = doc.get_content_charset()
-			try:
-                            text_body = doc.get_payload(decode=True).decode(charset, errors="replace")
-			catch:
-			    text_body = None
+                        try:
+                       	    text_body = doc.get_payload(decode=True).decode(charset, "replace")
+                        except:
+                            text_body = None
                         break
                 # create a phish object from the text body. If it was not found raise a error and output it.
                 if text_body is not None:
